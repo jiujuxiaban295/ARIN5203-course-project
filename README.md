@@ -4,6 +4,7 @@
 
 # 暂定标题
 **基于风险与换手约束的端到端深度投资组合优化**
+**End-to-End Deep Portfolio Optimization with Risk- and Turnover-Aware Objectives**
 
 ## 1. 研究问题与动机
 - 我们想解决的核心问题是什么？
