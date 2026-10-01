@@ -1,0 +1,13 @@
+# End-to-End Deep Portfolio Optimization with Risk- and Turnover-Aware Objectives
+
+## A：问题、动机与文献（93 词）
+
+We will investigate whether directly learning portfolio weights can improve practical ETF allocation after accounting for risk and trading costs. Traditional mean–variance optimization is vulnerable to estimation error, motivating the equal-weight benchmark examined by [DeMiguel et al. (2009)](https://doi.org/10.1093/rfs/hhm075). [Zhang et al. (2020)](https://arxiv.org/abs/2005.13665) demonstrate direct Sharpe-ratio optimization using neural networks. Building on this literature, we will apply a compact Transformer to a diversified ETF portfolio. We hypothesize that explicit variance and turnover penalties will reduce volatility and trading activity and improve out-of-sample net Sharpe ratios relative to training the same model solely for returns.
+
+## B：数据与方法（116 词）
+
+We will obtain daily adjusted OHLC prices for SPY, EFA, EEM, IEF, TLT, and GLD from Yahoo Finance through [yfinance](https://ranaroussi.github.io/yfinance/reference/api/yfinance.download.html) for 2006–2025, covering equities, government bonds, and gold. Each input will contain the preceding 60 trading days of returns, rolling volatility, and momentum. A small Transformer encoder with a softmax output will produce six nonnegative weights summing to one, with weekly rebalancing at the next session’s open. We will reuse [DeepDow’s data and allocation components](https://deepdow.readthedocs.io/en/latest/index.html) and implement a chronological training loop. The loss will combine negative mean portfolio return, return variance, and average L1 turnover measured against holdings after market drift, with penalty strengths selected on validation data. Training targets crossing dataset boundaries will be excluded.
+
+## C：实验与评估（100 词）
+
+Training, validation, and testing will cover 2006–2017, 2018–2020, and 2021–2025, respectively; preprocessing will use training data only. Baselines will include equal weighting, minimum variance, mean–variance optimization, and an LSTM trained with the same objective. All strategies will share execution assumptions and trading costs of 0, 10, and 25 basis points per traded dollar. Ablations will remove each penalty separately and jointly. We will report annualized net return, volatility, Sharpe ratio, maximum drawdown, and turnover; [paired block-bootstrap confidence intervals](https://www.ledoit.net/Robust_Sharpe_2008.pdf) will assess Sharpe differences from the return-only model. Neural runs will use three seeds. Cumulative wealth and weight plots will illustrate behavior.
