@@ -42,9 +42,9 @@ new architecture.
 \textbf{Plan and progress.} The plan has four stages: (1) build a leakage-free dataset and a
 cost-aware backtester; (2) implement the baselines and the four objective variants; (3) select
 penalty strengths and training length on a validation period; (4) evaluate once on a held-out
-test period with paired statistical tests. Stages 1--3 are complete. This report presents
-validation results (2018--2020). The test period (2021--2025) is reserved for the final report:
-it is not used for fitting, normalization or model selection, and no test numbers appear here.
+test period with paired statistical tests. Stages 1--3 are complete, so this report presents
+validation results (2018--2020). The test period (2021--2025) is reserved for the final report
+and is not used for fitting, scaling or selection.
 
 %-------------------------------------------------------------------------
 \section{Problem Statement}
@@ -55,12 +55,13 @@ from Yahoo Finance with yfinance~\cite{yfinance}. The study covers 2006--2025 (5
 trading days); 2005 is used only to warm up features. The series share one calendar and have no
 missing, duplicated or non-positive prices. We did not fill or winsorize any values. The
 risk-free rate is the FRED 3-month T-bill rate (DTB3)~\cite{fred_dtb3}, converted from its
-discount quote to a daily return and applied with a lag. The raw files are frozen with SHA-256
-hashes.
+discount quote to a daily return and applied with a lag. All results use one team snapshot
+(downloaded 3 November 2026, yfinance 1.2.0), frozen with SHA-256 hashes.
 
 \textbf{Splits.} Training 2006--2017 (626 weekly decisions), validation 2018--2020 (157), test
-2021--2025 (261). Feature scaling is fitted on training data only, and no label crosses a split
-boundary.
+2021--2025 (261). Feature scaling is fitted on training data only. Holding-period targets are cut
+at each split boundary, so no training target uses validation prices and no validation target
+uses test prices.
 
 \textbf{Task.} At each weekly decision the model receives 60 trading days of 18 features (daily
 return, 20-day volatility and 20-day momentum per asset) and outputs six long-only weights
@@ -75,8 +76,7 @@ bootstrap~\cite{ledoit2008robust} on test returns.
 
 \textbf{Expected results.} The variance penalty should lower volatility and drawdown, the
 turnover penalty should lower trading and cost drag, and together they should give the best
-net Sharpe, at the price of some raw return. A useful negative result would be that these
-benefits do not carry over from validation to test.
+net Sharpe, at the price of some raw return.
 
 %-------------------------------------------------------------------------
 \section{Technical Approach}
@@ -111,13 +111,15 @@ traded notional, solving exactly for the self-financing cost factor
 $\mu = 1 - c\sum_i|\mu w_i - \tilde w_i|$, and charges the initial purchase. The baselines are
 weekly equal weight; minimum variance and mean--variance (risk aversion 5), both estimated on a
 252-day rolling window with 10\% covariance shrinkage; the LSTM trained with the full
-objective; and a frozen Chronos-2-Synth forecaster~\cite{ansari2024chronos}, pre-trained on
+objective; and, as an extra baseline beyond the proposal, a frozen Chronos-2-Synth
+forecaster~\cite{ansari2024chronos}, pre-trained on
 synthetic data only, whose 5-day median forecasts are mapped to weights by a fixed softmax
 (temperature 0.05).
 
-\textbf{Implementation.} The code is native PyTorch. We planned to reuse DeepDow~\cite{deepdow},
-but its losses assume independent samples, which conflicts with the turnover term, so we
-follow its interface design without using its code. Two team members built independent
+\textbf{Implementation.} The results below come from a native PyTorch~\cite{pytorch}
+implementation; reusing DeepDow's~\cite{deepdow} scaler and softmax allocation layer, as
+proposed, is in progress but not yet used here. The sequential loss and backtester are our own,
+since DeepDow's losses treat samples independently. Two team members built independent
 implementations of the training loop as a cross-check. The pipeline passes 53 unit tests
 (causality of features, split boundaries, cost accounting) and 2,931 automated consistency
 checks on the saved outputs.
@@ -219,8 +221,7 @@ $\lambda_r=20$ & 0.90 & 0.89 & \textbf{0.95} \\
 period, so Table~\ref{tab:val} overstates out-of-sample performance. That period contains one
 dominant event (the 2020 crash), and its result rests on a stock--bond hedge that may not hold
 later. Three seeds measure training noise, not market uncertainty. Several return-only seeds
-stopped at epoch 1, suggesting the stopping rule partly fits validation noise. The ETF universe
-is fixed in hindsight and costs are linear.
+stopped at epoch 1, suggesting the stopping rule partly fits validation noise.
 
 %-------------------------------------------------------------------------
 \section{Remaining Work}
@@ -250,6 +251,8 @@ Sharpe ratio. \emph{J. Empirical Finance}, 15(5):850--859, 2008.
 \emph{TMLR}, 2024. Checkpoint used: \url{https://huggingface.co/autogluon/chronos-2-synth}.
 \bibitem{yfinance} R.~Aroussi. yfinance. \url{https://github.com/ranaroussi/yfinance}.
 \bibitem{deepdow} J.~Krepl. DeepDow. \url{https://github.com/jankrepl/deepdow}.
+\bibitem{pytorch} A.~Paszke et al. PyTorch: An imperative style, high-performance deep learning
+library. In \emph{NeurIPS}, 2019.
 \bibitem{fred_dtb3} Board of Governors of the Federal Reserve System. 3-Month Treasury Bill
 Secondary Market Rate (DTB3). FRED, Federal Reserve Bank of St. Louis.
 \end{thebibliography}
