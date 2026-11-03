@@ -8,6 +8,7 @@ Sample k:
   r_k                 = adj_open[e_{k+1}] / adj_open[e_k] - 1, the holding-period return
 """
 
+import zipfile
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,20 +18,51 @@ from deepdow.data.augment import prepare_standard_scaler
 from config import SPLITS, DataConfig
 
 FEATURE_NAMES = ("ret", "vol20", "mom20")
+DATA_DIR = "proposal_final_2006_2025"  # folder inside the dataset zip
+
+
+def _read_zip_csv(zf, name):
+    with zf.open(f"{DATA_DIR}/{name}") as f:
+        return pd.read_csv(f)
 
 
 def load_prices(path, tickers):
-    """Return (adj_close, adj_open) DataFrames from a yfinance download (auto_adjust=False)."""
-    raw = pd.read_csv(path, header=[0, 1], index_col=0, skiprows=[2])
-    raw.index = pd.to_datetime(raw.index)
-    missing = [t for t in tickers if t not in raw["Adj Close"].columns]
-    if missing:
-        raise ValueError(f"{path} has no data for {missing}; columns: {list(raw['Adj Close'].columns)}")
-    adj_close = raw["Adj Close"][tickers]
-    # Yahoo does not provide an adjusted open; scale the raw open by the close's adjustment factor.
-    adj_open = raw["Open"][tickers] * adj_close / raw["Close"][tickers]
+    """Return (adj_close, adj_open) from the team's dataset zip (2005 warm-up + 2006-2025).
+
+    `Adjusted Open` in the dataset is Open x (Adj Close / Close), the same factor as the close.
+    """
+    closes, opens = {}, {}
+    with zipfile.ZipFile(path) as zf:
+        for t in tickers:
+            df = pd.concat([_read_zip_csv(zf, f"{t}_warmup_2005.csv"), _read_zip_csv(zf, f"{t}_2006_2025.csv")])
+            df = df.assign(Date=pd.to_datetime(df["Date"])).set_index("Date").sort_index()
+            closes[t], opens[t] = df["Adjusted Close"], df["Adjusted Open"]
+    adj_close, adj_open = pd.DataFrame(closes), pd.DataFrame(opens)
     keep = adj_close.notna().all(axis=1) & adj_open.notna().all(axis=1)
     return adj_close[keep], adj_open[keep]
+
+
+def load_dtb3(path):
+    """FRED DTB3 (percent, discount basis) indexed by date; official blanks dropped."""
+    with zipfile.ZipFile(path) as zf:
+        df = _read_zip_csv(zf, "DTB3_2006_2025.csv")
+    s = pd.to_numeric(df["DTB3"], errors="coerce")
+    s.index = pd.to_datetime(df["observation_date"])
+    return s.dropna()
+
+
+def risk_free_returns(dtb3, starts, ends):
+    """Cash return over each holding period from the 3-month bill discount rate.
+
+    Uses the latest quote strictly before the period starts (never a later value).
+    P = 1 - d * 91/360, period return = P ** (-calendar_days / 91) - 1.
+    Periods with no earlier quote (2005 warm-up samples, in no split) get NaN.
+    """
+    pos = dtb3.index.searchsorted(starts, side="left") - 1
+    d = np.where(pos >= 0, dtb3.values[np.maximum(pos, 0)], np.nan) / 100
+    price = 1 - d * 91 / 360
+    days = (ends - starts).days.values
+    return price ** (-days / 91) - 1
 
 
 def build_features(adj_close, window):
@@ -45,6 +77,7 @@ def build_features(adj_close, window):
 class WeeklyData:
     X: np.ndarray  # (n_samples, n_features, lookback, n_assets), standardized
     r: np.ndarray  # (n_samples, n_assets) holding-period simple returns
+    rf: np.ndarray  # (n_samples,) risk-free return over the same holding period
     decision_dates: pd.DatetimeIndex
     exec_dates: pd.DatetimeIndex  # start of each holding period
     end_dates: pd.DatetimeIndex  # end of each holding period
@@ -54,11 +87,11 @@ class WeeklyData:
 
     def split(self, name):
         i = self.split_idx[name]
-        return self.X[i], self.r[i]
+        return self.X[i], self.r[i], self.rf[i]
 
 
 def build_weekly_data(cfg: DataConfig) -> WeeklyData:
-    adj_close, adj_open = load_prices(cfg.raw_path, cfg.tickers)
+    adj_close, adj_open = load_prices(cfg.data_path, cfg.tickers)
     feats = build_features(adj_close, cfg.feature_window)
     days = adj_close.index
 
@@ -78,10 +111,12 @@ def build_weekly_data(cfg: DataConfig) -> WeeklyData:
     assert not np.isnan(X).any() and not np.isnan(r).any()
 
     decision_dates, exec_dates, end_dates = days[d_pos], days[e_pos], days[end_pos]
+    rf = risk_free_returns(load_dtb3(cfg.data_path), exec_dates, end_dates)
     split_idx = {}
     for name, (start, stop) in SPLITS.items():
         mask = (decision_dates >= start) & (end_dates <= stop)
         split_idx[name] = np.flatnonzero(mask)
+        assert not np.isnan(rf[split_idx[name]]).any(), f"missing risk-free rate in {name}"
 
     # Standardize per feature with statistics from the training samples only.
     means, stds = prepare_standard_scaler(X, overlap=False, indices=list(split_idx["train"]))
@@ -90,6 +125,7 @@ def build_weekly_data(cfg: DataConfig) -> WeeklyData:
     return WeeklyData(
         X=X,
         r=r.astype(np.float32),
+        rf=rf.astype(np.float32),
         decision_dates=decision_dates,
         exec_dates=exec_dates,
         end_dates=end_dates,

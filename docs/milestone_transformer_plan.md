@@ -4,20 +4,12 @@
 
 ---
 
-## 0. 先解决：上传的数据和 proposal 对不上
+## 0. 数据（已解决）
 
-已上传的 `yahoo_raw.csv` / `adjusted_close.csv` 本身没问题：2004–2025 年，2006 年以后没有缺失值，Open / Close / Adj Close 都有。但有两处和 proposal 不一致：
-
-| 项目 | Proposal 写的 | 现在的数据 | 建议 |
-|---|---|---|---|
-| 资产 | SPY, EFA, EEM, IEF, TLT, GLD（6 只：美股、海外发达、新兴市场、中期国债、长期国债、黄金） | SPY, QQQ, IWM, TLT, GLD（5 只） | **重新下载 proposal 那 6 只**。现在这 5 只里有 3 只是美股，训练期两两相关系数约 0.9，等于少了 2 类资产，"跨资产配置"的说法会站不住 |
-| 无风险利率 | FRED 的 DTB3（三个月国债利率） | 没有 | 下载 `https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTB3` 上传即可 |
-
-重新下载时用和现在一样的方式（`yf.download(..., auto_adjust=False)`），保留 Open / Close / Adj Close 三列，代码可以直接读。代码里资产列表写在配置里，换资产不用改代码。
-
-如果来不及换：先用现在的 5 只跑通流程，报告里写明"临时用了这 5 只，期末换成 proposal 的 6 只"。
-
----
+用 `ARIN5203_Proposal_Datasets_2006_2025.zip`，代码直接读 zip，不用解压：
+- 6 只 ETF：SPY、EFA、EEM、IEF、TLT、GLD，和 proposal 一致
+- 2005 年的预热文件只用来算 2006 年初的特征，不作为训练目标
+- DTB3 换算成每个持有期的无风险收益：`P = 1 − DTB3/100 × 91/360`，`rf = P^(−持有期日历天数/91) − 1`。只用持有期开始前最近一次公布的报价，不用之后的值回填。换算方式和 Jin Ziqi 的材料包一致
 
 ## 1. 数据怎么处理（对应 proposal："adjusted open and close prices"、"60 trading days"、"20-day rolling volatility and momentum"）
 
@@ -131,7 +123,7 @@ L = − mean(R_p)  +  λ_var · Var(R_p)  +  λ_to · mean(TO)
 
 **所有策略**（Transformer 和 baseline）都走同一个回测器，输出：
 - 扣费后的年化收益、年化波动率
-- Sharpe：用超过 DTB3 的超额收益来算。周度无风险收益 ≈ `DTB3 / 100 / 52`。DTB3 下载之前先按 rf = 0 计算，报告里注明
+- Sharpe：用超过 DTB3 的超额收益来算，换算方式见第 0 节
 - 最大回撤
 - 平均换手（年化）
 - 成本分 0 / 10 / 25 bps 三档
@@ -186,11 +178,13 @@ requirements.txt
 
 ```bash
 pip install -r requirements.txt
-python src/train.py --variant both                                # proposal 的 6 只 ETF
-python src/train.py --variant none --tickers SPY,QQQ,IWM,TLT,GLD  # 用现在上传的 5 只
+python src/train.py --variant none            # 不加惩罚，约 4 分钟（CPU）
+python src/train.py --variant both            # 两个惩罚，9 组 λ，约 35 分钟
+python src/train.py --variant both --seed 1   # 换随机种子
+python src/train.py --variant both --eval-test  # 设定全部定好后，才输出 2021–2025 测试结果
 ```
 
-`--variant` 可以是 `none` / `var` / `to` / `both`，对应四组消融。结果保存在 `results/transformer_<variant>_seed<k>/`：`grid.csv`（每组 λ 在验证集上的表现）、`best.json`（选中的设定）、`weights_val.csv` / `weights_test.csv`（每周的权重）、`metrics.csv`（三档成本下的各项指标）。
+`--variant` 可以是 `none` / `var` / `to` / `both`，对应四组消融。结果保存在 `results/transformer_<variant>_seed<k>/`：`grid.csv`（每组 λ 在验证集上的表现）、`best.json`（选中的设定）、`weights_val.csv`（每周的权重）、`metrics.csv`（三档成本下的各项指标，Sharpe 已扣 DTB3）。加 `--eval-test` 时才会多出 `weights_test.csv` 和测试期指标。
 
 ## 10. 今天的顺序
 

@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 
-# Proposal: SPY, EFA, EEM, IEF, TLT, GLD. Override with --tickers until that data is uploaded.
 PROPOSAL_TICKERS = ["SPY", "EFA", "EEM", "IEF", "TLT", "GLD"]
 
 # Chronological splits (inclusive calendar bounds). A sample belongs to a split only if
@@ -20,7 +19,7 @@ SELECTION_COST_BPS = 10  # validation criterion: net Sharpe at 10 bps
 
 @dataclass
 class DataConfig:
-    raw_path: str = "yahoo_raw.csv"
+    data_path: str = "ARIN5203_Proposal_Datasets_2006_2025.zip"
     tickers: list = field(default_factory=lambda: list(PROPOSAL_TICKERS))
     lookback: int = 60  # trading days of history per input
     feature_window: int = 20  # rolling volatility / momentum window

@@ -29,14 +29,14 @@ class ChunkDataset(Dataset):
 class FullSequence(Dataset):
     """The whole split as a single ordered sequence (for validation)."""
 
-    def __init__(self, X, r):
-        self.X, self.r = torch.as_tensor(X), torch.as_tensor(r)
+    def __init__(self, X, r, rf):
+        self.X, self.r, self.rf = torch.as_tensor(X), torch.as_tensor(r), torch.as_tensor(rf)
 
     def __len__(self):
         return 1
 
     def __getitem__(self, i):
-        return self.X, self.r
+        return self.X, self.r, self.rf
 
 
 def risk_turnover_loss(w, r, lambda_var, lambda_to):
@@ -74,11 +74,11 @@ class LitPortfolio(L.LightningModule):
         return loss
 
     def validation_step(self, batch, _):
-        x, r = batch
+        x, r, rf = batch
         w = self(x)[0]
         gross, to = gross_and_turnover(w, r[0], torch.zeros_like(w[0]))
         net = net_returns(gross, to, SELECTION_COST_BPS)
-        self.log("val_sharpe", annualized_sharpe(net), prog_bar=True)
+        self.log("val_sharpe", annualized_sharpe(net, rf[0]), prog_bar=True)
         self.log("val_turnover", to[1:].mean())
 
     def configure_optimizers(self):
@@ -86,8 +86,7 @@ class LitPortfolio(L.LightningModule):
 
 
 def make_loaders(data, cfg: TrainConfig):
-    X_tr, r_tr = data.split("train")
-    X_va, r_va = data.split("val")
+    X_tr, r_tr, _ = data.split("train")
     train = DataLoader(ChunkDataset(X_tr, r_tr, cfg.chunk_len), batch_size=cfg.batch_size, shuffle=True)
-    val = DataLoader(FullSequence(X_va, r_va), batch_size=1)
+    val = DataLoader(FullSequence(*data.split("val")), batch_size=1)
     return train, val

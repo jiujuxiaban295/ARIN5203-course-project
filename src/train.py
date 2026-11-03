@@ -2,7 +2,8 @@
 
 Examples (run from the repo root):
   python src/train.py --variant both
-  python src/train.py --variant none --tickers SPY,QQQ,IWM,TLT,GLD
+  python src/train.py --variant none --seed 1
+  python src/train.py --variant both --eval-test   # only once the setup is final
 
 Variants (the proposal's ablations):
   none  lambda_var = lambda_to = 0
@@ -67,11 +68,11 @@ def fit_one(data, model_cfg, train_cfg, out_dir):
 
 @torch.no_grad()
 def predict(lit, data, split):
-    X, r = data.split(split)
+    X, r, rf = data.split(split)
     lit.eval()
     w = lit(torch.as_tensor(X)[None])[0]
     dates = data.exec_dates[data.split_idx[split]]
-    return pd.DataFrame(w.numpy(), index=dates, columns=data.tickers), torch.as_tensor(r)
+    return pd.DataFrame(w.numpy(), index=dates, columns=data.tickers), torch.as_tensor(r), torch.as_tensor(rf)
 
 
 def main():
@@ -79,13 +80,15 @@ def main():
     p.add_argument("--variant", choices=VARIANTS, default="both")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--tickers", help="comma-separated; default is the proposal's six ETFs")
-    p.add_argument("--raw-path", default="yahoo_raw.csv")
+    p.add_argument("--data", default=DataConfig.data_path, help="the team dataset zip")
     p.add_argument("--max-epochs", type=int, default=TrainConfig.max_epochs)
     p.add_argument("--out", default="results")
+    p.add_argument("--eval-test", action="store_true",
+                   help="also output 2021-2025 test weights/metrics (keep off while tuning)")
     args = p.parse_args()
 
     torch.set_num_threads(4)
-    data_cfg = DataConfig(raw_path=args.raw_path)
+    data_cfg = DataConfig(data_path=args.data)
     if args.tickers:
         data_cfg.tickers = args.tickers.split(",")
     data = build_weekly_data(data_cfg)
@@ -107,11 +110,11 @@ def main():
     best = grid.loc[grid["val_sharpe_10bps"].idxmax()]
     lit = LitPortfolio.load_from_checkpoint(best["ckpt"])
     metrics = []
-    for split in ("val", "test"):
-        weights, r = predict(lit, data, split)
+    for split in ("val", "test") if args.eval_test else ("val",):
+        weights, r, rf = predict(lit, data, split)
         weights.to_csv(run_dir / f"weights_{split}.csv")
         w = torch.tensor(weights.values)
-        metrics += [{"split": split, **summary(w, r, c)} for c in COST_LEVELS_BPS]
+        metrics += [{"split": split, **summary(w, r, c, rf)} for c in COST_LEVELS_BPS]
     metrics = pd.DataFrame(metrics)
     metrics.to_csv(run_dir / "metrics.csv", index=False)
 
@@ -122,7 +125,6 @@ def main():
         "selected": best.drop("ckpt").to_dict(),
         "model": asdict(model_cfg),
         "train": asdict(replace(base, lambda_var=best["lambda_var"], lambda_to=best["lambda_to"])),
-        "note": "Sharpe uses rf = 0 until DTB3 is added",
     }, indent=2, default=float))
     print(metrics.round(4).to_string(index=False))
 
