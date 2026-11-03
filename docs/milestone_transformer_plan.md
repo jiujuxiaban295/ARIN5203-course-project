@@ -1,0 +1,181 @@
+# Transformer 训练计划（Milestone 版）
+
+目标：周五（11/6）前跑出第一版能放进 milestone 报告的结果。所有设定都对应 `proposal_merged.md`，对不上的地方在第 0 节列出。
+
+---
+
+## 0. 先解决：上传的数据和 proposal 对不上
+
+已上传的 `yahoo_raw.csv` / `adjusted_close.csv` 本身没问题：2004–2025 年，2006 年以后没有缺失值，Open / Close / Adj Close 都有。但有两处和 proposal 不一致：
+
+| 项目 | Proposal 写的 | 现在的数据 | 建议 |
+|---|---|---|---|
+| 资产 | SPY, EFA, EEM, IEF, TLT, GLD（6 只：美股、海外发达、新兴市场、中期国债、长期国债、黄金） | SPY, QQQ, IWM, TLT, GLD（5 只） | **重新下载 proposal 那 6 只**。现在这 5 只里有 3 只是美股，训练期两两相关系数约 0.9，等于少了 2 类资产，"跨资产配置"的说法会站不住 |
+| 无风险利率 | FRED 的 DTB3（三个月国债利率） | 没有 | 下载 `https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTB3` 上传即可 |
+
+重新下载时用和现在一样的方式（`yf.download(..., auto_adjust=False)`），保留 Open / Close / Adj Close 三列，代码可以直接读。代码里资产列表写在配置里，换资产不用改代码。
+
+如果来不及换：先用现在的 5 只跑通流程，报告里写明"临时用了这 5 只，期末换成 proposal 的 6 只"。
+
+---
+
+## 1. 数据怎么处理（对应 proposal："adjusted open and close prices"、"60 trading days"、"20-day rolling volatility and momentum"）
+
+**价格**
+- 复权收盘价：直接用 `Adj Close`
+- 复权开盘价：`Open × Adj Close / Close`。Yahoo 不直接给复权开盘价，这样换算后口径和复权收盘价一致
+
+**特征**（每只资产每天 3 个，全部只用当天收盘及以前的数据）
+1. 日收益率：`P_t / P_{t-1} - 1`（复权收盘价）
+2. 20 日波动率：过去 20 天日收益率的标准差
+3. 20 日动量：`P_t / P_{t-20} - 1`
+
+**模型输入**：决策日之前 60 个交易日的特征，形状是 `60 天 × N 只资产 × 3 个特征`
+
+**标准化**：每个"资产 × 特征"组合只用训练期（2006–2017）的均值和标准差，验证期和测试期沿用同一组数值（对应 proposal："preprocessing will use training data only"）
+
+**预热数据**：2006 年第一周就要有 60 天输入，每个特征又要往前看 20 天，所以会用到 2005 年第 4 季度的价格。这部分**只作为输入，不作为训练目标**，报告里写一句说明。
+
+---
+
+## 2. 调仓时点和收益怎么算（对应 proposal："rebalanced weekly at the next session's open"）
+
+- **决策日**：每周最后一个交易日（一般是周五），用当天收盘及以前的信息算权重
+- **执行**：下一个交易日（一般是下周一）**开盘**成交
+- **持有期收益**：从这次执行的开盘价，到下次执行的开盘价
+  `r_i = O_{下次执行} / O_{这次执行} - 1`（复权开盘价）
+- 决策用收盘信息，成交用第二天开盘价，**不会偷看未来**
+
+**样本量**：训练期约 604 周，验证期约 151 周，测试期约 251 周。
+
+**跨期剔除**（对应 proposal："targets crossing period boundaries will be excluded"）：持有期一旦跨过 2017-12-31 或 2020-12-31，这个样本就不用，避免训练目标用到验证或测试期的价格。
+
+---
+
+## 3. 换手和交易成本（对应 proposal："average L1 turnover measured against drifted holdings"）
+
+持有一周后，价格变动会让实际仓位偏离当初的目标权重，这叫"漂移后的持仓"：
+
+```
+w̃_k = w_k ⊙ (1 + r_k) / (1 + w_k · r_k)
+```
+
+下一周的换手 = 新目标权重和漂移后持仓之差的绝对值之和：
+
+```
+TO_{k+1} = Σ_i | w_{k+1,i} − w̃_{k,i} |
+```
+
+扣成本后的周收益：`net_k = w_k · r_k − c × TO_k`，其中 `c` 取 0 / 10 / 25 bps，也就是 0 / 0.001 / 0.0025。
+
+**训练 loss、回测器、所有 baseline 都用同一套公式。**
+
+---
+
+## 4. 模型（对应 proposal："small Transformer encoder with a softmax head"）
+
+数据只有约 600 个训练样本，模型必须小，否则一定过拟合。
+
+```
+输入  (B, 60, N, 3)
+  → 每天的 N×3 个特征拼成一个向量（长度 3N），一天就是一个 token，共 60 个 token
+  → 线性层投影到 d_model = 32
+  → 加可学习的位置编码
+  → Transformer Encoder：2 层，4 个 head，前馈层维度 64，dropout 0.1
+  → 取最后一天的 token（它能通过注意力看到前 60 天）
+  → 线性层输出 N 个分数
+  → softmax → N 个非负、和为 1 的权重（只做多，不做空）
+```
+
+参数量约 2 万。注意力是在 60 天的时间维度上做的；资产之间的关系由每个 token 内部的线性投影来学。
+
+---
+
+## 5. Loss（对应 proposal："negative mean portfolio return, return variance, and average L1 turnover"）
+
+**关键点**：换手要用到上一周的权重，所以样本**不能**像 DeepDow 那样互相独立、随机打乱。这正是 proposal 里说要改 DeepDow 的地方。
+
+**做法**：训练时每次取**连续 26 周**作为一段，按时间顺序算出每周的权重，在这一段上算 loss：
+
+```
+L = − mean(R_p)  +  λ_var · Var(R_p)  +  λ_to · mean(TO)
+```
+
+- `R_p`：每周的组合毛收益 `w_k · r_k`
+- `TO`：每周换手，算法见第 3 节。段内第一周只提供初始持仓，换手从第二周开始计
+- 每个 batch 是若干段随机起点的连续 26 周；段之间可以打乱，段内保持时间顺序
+
+**λ 的含义和搜索范围**
+- `λ_to` 可以直接理解为"每单位换手的成本"。`λ_to = 0.001` 就等于 10 bps 成本，所以网格围绕成本档来取：`{0, 0.001, 0.0025, 0.005}`
+- `λ_var` 相当于均值–方差里的风险厌恶系数：`{0, 1, 5, 10}`
+- 两个 λ 都在**验证集**上选，标准是 10 bps 成本下的扣费 Sharpe（对应 proposal："penalty strengths selected on validation data"）
+
+---
+
+## 6. 训练设置
+
+| 项目 | 设置 |
+|---|---|
+| 优化器 | Adam，学习率 1e-3，weight decay 1e-4 |
+| 每段长度 / batch | 26 周 / 每个 batch 16 段 |
+| 最多训练轮数 | 200 个 epoch，验证集扣费 Sharpe 连续 20 轮不提升就早停 |
+| 梯度裁剪 | 1.0 |
+| 随机种子 | milestone 先用 1 个，期末用 3 个（对应 proposal："three random seeds"） |
+| 机器 | CPU 就够，模型小，每个 epoch 几秒 |
+
+测试期（2021–2025）用在验证集上选好的那个模型，**参数固定不再训练**，按周滚动输入数据，输出的权重交给回测器。
+
+---
+
+## 7. 评估（对应 proposal 的 evaluation 部分）
+
+**所有策略**（Transformer 和 baseline）都走同一个回测器，输出：
+- 扣费后的年化收益、年化波动率
+- Sharpe：用超过 DTB3 的超额收益来算。周度无风险收益 ≈ `DTB3 / 100 / 52`。DTB3 下载之前先按 rf = 0 计算，报告里注明
+- 最大回撤
+- 平均换手（年化）
+- 成本分 0 / 10 / 25 bps 三档
+
+**Baseline**
+- 等权：每周调回 1/N
+- 最小方差：用过去 252 个交易日的协方差，只做多
+- 均值–方差：用过去 252 天的均值和协方差，只做多，风险厌恶系数在验证集上选
+- LSTM：期末再做
+
+---
+
+## 8. Milestone 要交出的东西 vs. 留到期末
+
+| 现在做（milestone） | 留到期末 |
+|---|---|
+| 数据处理 + 回测器 | LSTM baseline |
+| 等权、最小方差、均值–方差三个 baseline | 完整的四组消融（两个惩罚各开各关） |
+| Transformer 两个版本：**不加惩罚**和**两个惩罚都加** | 3 个随机种子 |
+| 一张结果表（所有方法 × 三档成本） | 成对 bootstrap 置信区间（Ledoit–Wolf） |
+| 净值曲线图 + Transformer 权重随时间变化图 | 回撤图、失败案例分析、不同市场阶段对比 |
+
+"不加惩罚"和"两个都加"这两个版本恰好是消融实验的两端，milestone 里就能初步回答 proposal 的核心问题：加了惩罚以后，波动和换手有没有降、收益损失了多少。
+
+---
+
+## 9. 代码结构
+
+```
+src/
+  data.py        读数据、复权开盘价、特征、标准化、按周切样本
+  backtest.py    共用回测器：漂移、换手、成本、各项指标
+  baselines.py   等权、最小方差、均值–方差
+  model.py       Transformer
+  loss.py        连续段上的收益 / 方差 / 换手 loss
+  train.py       训练、λ 网格搜索、早停
+  evaluate.py    出表、画图
+results/         表格和图
+```
+
+依赖：`pandas numpy scipy torch matplotlib`（torch 装 CPU 版即可）。
+
+---
+
+## 10. 今天的顺序
+
+1. 确认资产（第 0 节）→ 2. `data.py` → 3. `backtest.py` + `baselines.py`，先出 baseline 的表 → 4. `model.py` + `loss.py` + `train.py` → 5. 出表和图 → 6. 写报告第四节
