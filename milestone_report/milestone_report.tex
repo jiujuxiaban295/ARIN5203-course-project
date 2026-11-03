@@ -1,11 +1,14 @@
 % ARIN5203 Project Milestone Report (2-3 pages)
-% Uses the CVPR style file if it is present (copy cvpr.sty from the course template into this
-% folder, or paste the body into the course Overleaf template). Without cvpr.sty it falls back to
+% Course template: CVPR 2022 official LaTeX template on Overleaf
+% https://www.overleaf.com/latex/templates/cvpr2022-official-latex-template/bphmxkmtqzjh
+% Open it as a template, upload this file and the figures/ folder, and set this file as the
+% main document; cvpr.sty from the template is then picked up automatically. Without cvpr.sty it falls back to
 % a plain two-column layout with similar margins.
 \documentclass[10pt,twocolumn,letterpaper]{article}
 
 \IfFileExists{cvpr.sty}{%
-  \usepackage[pagenumbers]{cvpr}%
+  \usepackage[pagenumbers]{cvpr}% final (non-review) mode, with page numbers
+  \def\cvprPaperID{*****}\def\confName{CVPR}\def\confYear{2022}%
 }{%
   \usepackage[letterpaper,top=1in,bottom=1in,left=0.75in,right=0.75in,columnsep=0.33in]{geometry}%
   \usepackage{times}%
