@@ -32,7 +32,7 @@
 
 **模型输入**：决策日之前 60 个交易日的特征，形状是 `60 天 × N 只资产 × 3 个特征`
 
-**标准化**：每个"资产 × 特征"组合只用训练期（2006–2017）的均值和标准差，验证期和测试期沿用同一组数值（对应 proposal："preprocessing will use training data only"）
+**标准化**：每个特征（所有资产合在一起算）只用训练期（2006–2017）的均值和标准差，验证期和测试期沿用同一组数值（对应 proposal："preprocessing will use training data only"）。直接用 DeepDow 的 `prepare_standard_scaler`
 
 **预热数据**：2006 年第一周就要有 60 天输入，每个特征又要往前看 20 天，所以会用到 2005 年第 4 季度的价格。这部分**只作为输入，不作为训练目标**，报告里写一句说明。
 
@@ -46,7 +46,7 @@
   `r_i = O_{下次执行} / O_{这次执行} - 1`（复权开盘价）
 - 决策用收盘信息，成交用第二天开盘价，**不会偷看未来**
 
-**样本量**：训练期约 604 周，验证期约 151 周，测试期约 251 周。
+**样本量**：训练期 624 周，验证期 155 周，测试期 259 周。
 
 **跨期剔除**（对应 proposal："targets crossing period boundaries will be excluded"）：持有期一旦跨过 2017-12-31 或 2020-12-31，这个样本就不用，避免训练目标用到验证或测试期的价格。
 
@@ -74,7 +74,7 @@ TO_{k+1} = Σ_i | w_{k+1,i} − w̃_{k,i} |
 
 ## 4. 模型（对应 proposal："small Transformer encoder with a softmax head"）
 
-数据只有约 600 个训练样本，模型必须小，否则一定过拟合。
+数据只有 624 个训练样本，模型必须小，否则一定过拟合。
 
 ```
 输入  (B, 60, N, 3)
@@ -158,23 +158,39 @@ L = − mean(R_p)  +  λ_var · Var(R_p)  +  λ_to · mean(TO)
 
 ---
 
-## 9. 代码结构
+## 9. 代码结构和用到的库
+
+能用现成库的地方都用了库，只有 proposal 里说要我们自己加的部分是自己写的。
+
+| 部分 | 用的库 | 自己写的 |
+|---|---|---|
+| Transformer 主体 | `torch.nn.TransformerEncoder`（PyTorch 自带） | 把每天的特征拼成 token、位置编码 |
+| 输出权重 | DeepDow `SoftmaxAllocator` | — |
+| 标准化 | DeepDow `prepare_standard_scaler` | — |
+| 训练循环、早停、存最优模型、固定随机种子 | PyTorch Lightning（`Trainer`、`EarlyStopping`、`ModelCheckpoint`、`seed_everything`） | — |
+| 均值–方差 / 最小方差 baseline | PyPortfolioOpt（下一步写） | — |
+| 风险 + 换手 loss、连续多周的取样方式 | 没有现成的（DeepDow 的 loss 把样本当作互相独立，也没有换手项） | `lit.py`、`portfolio.py`，这正是 proposal 说要加的 |
 
 ```
 src/
+  config.py      所有设定（资产、时间段、模型大小、λ 网格）
   data.py        读数据、复权开盘价、特征、标准化、按周切样本
-  backtest.py    共用回测器：漂移、换手、成本、各项指标
-  baselines.py   等权、最小方差、均值–方差
+  portfolio.py   漂移、换手、成本、各项指标（loss、验证、回测共用同一套公式）
   model.py       Transformer
-  loss.py        连续段上的收益 / 方差 / 换手 loss
-  train.py       训练、λ 网格搜索、早停
-  evaluate.py    出表、画图
-results/         表格和图
+  lit.py         Lightning 模块、连续段数据集、风险 + 换手 loss
+  train.py       λ 网格搜索 → 选最优 → 输出验证期和测试期的权重与指标
+requirements.txt
 ```
 
-依赖：`pandas numpy scipy torch matplotlib`（torch 装 CPU 版即可）。
+运行（在仓库根目录）：
 
----
+```bash
+pip install -r requirements.txt
+python src/train.py --variant both                                # proposal 的 6 只 ETF
+python src/train.py --variant none --tickers SPY,QQQ,IWM,TLT,GLD  # 用现在上传的 5 只
+```
+
+`--variant` 可以是 `none` / `var` / `to` / `both`，对应四组消融。结果保存在 `results/transformer_<variant>_seed<k>/`：`grid.csv`（每组 λ 在验证集上的表现）、`best.json`（选中的设定）、`weights_val.csv` / `weights_test.csv`（每周的权重）、`metrics.csv`（三档成本下的各项指标）。
 
 ## 10. 今天的顺序
 

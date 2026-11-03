@@ -1,0 +1,10 @@
+# Install torch first; on a machine without a GPU the CPU build is enough:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch>=2.6
+lightning==2.6.6
+deepdow==0.2.3
+numpy
+pandas
+scipy
+matplotlib
+PyPortfolioOpt==1.6.0
