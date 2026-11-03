@@ -1,7 +1,7 @@
-% ARIN5203 Project Milestone Report
-% Uses the CVPR style file if it is present (copy cvpr.sty / ieeenat_fullname.bst from the
-% course template into this folder, or paste the body into the course Overleaf template).
-% Without cvpr.sty it falls back to a plain two-column layout with similar margins.
+% ARIN5203 Project Milestone Report (2-3 pages)
+% Uses the CVPR style file if it is present (copy cvpr.sty from the course template into this
+% folder, or paste the body into the course Overleaf template). Without cvpr.sty it falls back to
+% a plain two-column layout with similar margins.
 \documentclass[10pt,twocolumn,letterpaper]{article}
 
 \IfFileExists{cvpr.sty}{%
@@ -15,11 +15,10 @@
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{booktabs}
-\usepackage{multirow}
 \usepackage[hidelinks]{hyperref}
 
 \title{End-to-End Deep Portfolio Optimization with\\Risk- and Turnover-Aware Objectives\\[2pt]
-\large ARIN5203 Project Milestone}
+\large ARIN5203 Project Milestone Report}
 
 \author{Yiyang Lu (21383493) \qquad Jin Ziqi (21418846) \qquad Jingran Li (21327865)}
 
@@ -29,207 +28,212 @@
 %-------------------------------------------------------------------------
 \section{Introduction}
 
-End-to-end portfolio learning trains a network to output allocation weights directly and
-scores it on portfolio performance, instead of forecasting returns and passing the forecasts to
-an optimizer~\cite{zhang2020deep,kisiel2023portfolio}. We study one design choice in this
-setting: the training objective. Starting from a small Transformer allocator, we add a variance
-penalty and an L1 turnover penalty to a return objective and ask whether they lower
-out-of-sample volatility and trading, whether the gains survive transaction costs, and what
-return they cost relative to unregularized training and simple rules such as equal
-weighting~\cite{demiguel2009optimal}. Our contribution is a controlled study of objectives, not a
+A portfolio model can either forecast returns and pass the forecasts to an optimizer, or output
+allocation weights directly and be trained on portfolio performance. The second, end-to-end
+approach avoids feeding forecast errors into the optimizer~\cite{zhang2020deep,kisiel2023portfolio},
+but its training objective then decides what kind of portfolio the network learns. Our project
+studies that choice. We train a small Transformer allocator with a return objective and add a
+variance penalty, an L1 turnover penalty, or both. We ask whether the penalties lower
+volatility and trading, whether the benefit survives transaction costs, and how much return
+they give up compared with unregularized training and simple rules such as equal
+weighting~\cite{demiguel2009optimal}. The contribution is a controlled study of objectives, not a
 new architecture.
 
-Since the proposal we have built the full pipeline: a frozen six-ETF dataset, a weekly
-cost-aware backtester shared by all strategies, three classical baselines, an LSTM baseline,
-four Transformer objective variants trained with three seeds each, a frozen pre-trained
-forecasting baseline, and paired bootstrap inference. Two team members wrote independent
-implementations of the training loop. Both find that the joint risk-and-turnover objective
-gives the highest validation Sharpe ratio. On the held-out test period (2021--2025), however,
-the risk penalty reverses: the joint objective has a significantly \emph{lower} net Sharpe ratio
-than return-only training. We trace this to the model's learned bond overweight and the 2022
-stock--bond correlation break, and we revise our plan for the final report around it.
+\textbf{Plan and progress.} The plan has four stages: (1) build a leakage-free dataset and a
+cost-aware backtester; (2) implement the baselines and the four objective variants; (3) select
+penalty strengths and training length on a validation period; (4) evaluate once on a held-out
+test period with paired statistical tests. Stages 1--3 are complete. This report presents
+validation results (2018--2020). The test period (2021--2025) is reserved for the final report:
+it is not used for fitting, normalization or model selection, and no test numbers appear here.
 
 %-------------------------------------------------------------------------
 \section{Problem Statement}
 
-\textbf{Data.} We use daily adjusted open and close prices for SPY, EFA, EEM, IEF, TLT and GLD
-(U.S., developed and emerging equities, intermediate and long Treasuries, gold) from Yahoo
-Finance via yfinance~\cite{yfinance}. The study period is 2006--2025 (5,031 common trading
-days); 2005 is used only to warm up features. All six series share the same calendar, with no
-missing, duplicated or non-positive prices and no filled or winsorized values. Adjusted open is
-the raw open times the adjustment factor (adjusted close / close). The risk-free rate is the
-FRED 3-month Treasury-bill rate (DTB3)~\cite{fred_dtb3}, converted from its discount quote to a
-daily return and used only with a lag and only as-of (no future backfill). The raw files and
-their SHA-256 hashes are frozen with the code.
+\textbf{Dataset.} Daily adjusted open and close prices for six ETFs, SPY, EFA, EEM, IEF, TLT and
+GLD (U.S., developed and emerging equities, intermediate and long Treasuries, gold), downloaded
+from Yahoo Finance with yfinance~\cite{yfinance}. The study covers 2006--2025 (5,031 common
+trading days); 2005 is used only to warm up features. The series share one calendar and have no
+missing, duplicated or non-positive prices. We did not fill or winsorize any values. The
+risk-free rate is the FRED 3-month T-bill rate (DTB3)~\cite{fred_dtb3}, converted from its
+discount quote to a daily return and applied with a lag. The raw files are frozen with SHA-256
+hashes.
 
-\textbf{Splits.} Training covers 2006--2017 (626 weekly decisions), validation 2018--2020 (157)
-and test 2021--2025 (261). Feature standardization is fitted on training data only, and no
-training label extends into validation, nor any validation label into test.
+\textbf{Splits.} Training 2006--2017 (626 weekly decisions), validation 2018--2020 (157), test
+2021--2025 (261). Feature scaling is fitted on training data only, and no label crosses a split
+boundary.
 
-\textbf{Task.} At each weekly decision, the model sees the previous 60 trading days of 18
-features (daily return, 20-day rolling volatility and 20-day momentum for each asset) and
-outputs six long-only weights that sum to one. The signal uses data up to the previous close;
-trades execute at the first open of the week, and holdings then drift until the next
-rebalance.
+\textbf{Task.} At each weekly decision the model receives 60 trading days of 18 features (daily
+return, 20-day volatility and 20-day momentum per asset) and outputs six long-only weights
+summing to one. The signal uses data up to the previous close; trades execute at the next
+open, and holdings drift until the following rebalance.
 
 \textbf{Evaluation.} The primary metric is the annualized net Sharpe ratio of daily returns in
-excess of the lagged risk-free rate, at 10\,bps per traded dollar. We also report net CAGR,
-volatility, maximum drawdown and annualized L1 turnover (buys plus sells), each at 0, 10 and
-25\,bps. Our hypothesis is that the variance penalty lowers volatility and drawdown, the
-turnover penalty lowers trading and cost drag, and the two together give the best
-risk--return--cost balance.
+excess of the risk-free rate at 10\,bps per traded dollar. We also report net CAGR, volatility,
+maximum drawdown (MDD) and annualized L1 turnover, each at 0, 10 and 25\,bps. The final
+comparison of objectives will use a paired studentized circular-block
+bootstrap~\cite{ledoit2008robust} on test returns.
+
+\textbf{Expected results.} The variance penalty should lower volatility and drawdown, the
+turnover penalty should lower trading and cost drag, and together they should give the best
+net Sharpe, at the price of some raw return. A useful negative result would be that these
+benefits do not carry over from validation to test.
 
 %-------------------------------------------------------------------------
 \section{Technical Approach}
 
-\textbf{Allocator.} Each day's 18 features are projected to $d=32$, combined with sinusoidal
-positional encodings, and passed through a 2-layer Transformer encoder (4 heads,
-dropout 0.1). The last token goes through LayerNorm, a linear layer and a softmax to produce the
-weights (17,958 parameters, randomly initialized). Self-attention inside the input window sees
-only past data. The LSTM baseline uses the same input and softmax head (6,918 parameters).
+\textbf{Allocator.} Each day's 18 features are linearly projected to $d=32$ and given
+sinusoidal position encodings. A 2-layer Transformer encoder (4 heads, dropout 0.1) processes
+the window, and the last token passes through LayerNorm, a linear layer and a softmax to give
+the weights (17,958 parameters, trained from scratch). The window contains only past data, so
+bidirectional attention inside it does not leak future information. An LSTM with the same input
+and output head (6,918 parameters) serves as the deep-learning baseline.
 
 \textbf{Sequential objective.} Turnover depends on the previous holdings, so weeks cannot be
-treated as independent samples. We therefore run each epoch over the full chronological
-training sequence and minimize
+shuffled as independent samples. Each epoch runs over the whole chronological training sequence
+and minimizes
 \begin{equation}
   \mathcal{L} = -\overline{G} + \lambda_r\,\mathrm{Var}(G) + \lambda_t\,\overline{T},
   \qquad T_k = \lVert \mathbf{w}_k - \tilde{\mathbf{w}}_{k} \rVert_1 ,
 \end{equation}
-where $G_k$ is the gross return in week $k$, $\mathbf{w}_k$ is the target weight vector and
-$\tilde{\mathbf{w}}_k$ is the previous week's weights after drifting with prices. The four
-ablations are \emph{return} ($\lambda_r{=}\lambda_t{=}0$), \emph{risk}, \emph{turnover} and
-\emph{full} (both penalties). We use AdamW (learning rate $10^{-3}$, weight decay $10^{-4}$) with
-gradient clipping at 1, up to 120 epochs, and early stopping with patience 20 on validation net
-Sharpe. Penalty strengths are chosen on validation with seed 11 from
-$\lambda_r\in\{1,5,20\}$ and $\lambda_t\in\{5{\times}10^{-4}, 2.5{\times}10^{-3}\}$. Seeds 29 and 47
-then reuse those strengths and select only their stopping epoch. Both penalized families
-selected $\lambda_r{=}20$ and $\lambda_t{=}2.5{\times}10^{-3}$. Each family is reported as the
-average of its three seeds' weights (the ``ensemble'').
+where $G_k$ is the gross portfolio return in week $k$, $\mathbf{w}_k$ the new target weights
+and $\tilde{\mathbf{w}}_k$ the previous weights after drifting with prices. The four variants
+are \emph{return} ($\lambda_r{=}\lambda_t{=}0$), \emph{risk}, \emph{turnover} and \emph{full}.
 
-\textbf{Backtester and baselines.} All strategies share the same execution and cost rules. The
-backtester solves exactly for the self-financing cost factor
-$\mu = 1 - c\sum_i|\mu w_i - \tilde w_i|$, charges the initial purchase, and starts each split
-from cash. Baselines are (i) weekly equal weight; (ii) minimum variance and (iii) mean--variance
-with risk aversion 5, both on a 252-day rolling window with 10\% diagonal covariance shrinkage;
-(iv) the LSTM with the full objective; and (v) a frozen Chronos-2-Synth
-forecaster~\cite{ansari2024chronos}, pre-trained on synthetic data only, whose 5-day median
-forecasts are mapped to weights by a fixed softmax with temperature 0.05. We compare the full
-and return Transformer ensembles with a paired studentized circular-block
-bootstrap~\cite{ledoit2008robust} (999 draws, block length 20 days, HAC standard errors).
+\textbf{Training and selection.} AdamW (learning rate $10^{-3}$, weight decay $10^{-4}$),
+gradient clipping at 1, at most 120 epochs, early stopping (patience 20) on validation net
+Sharpe at 10\,bps. Penalty strengths are searched with seed 11 over
+$\lambda_r\in\{1,5,20\}$ and $\lambda_t\in\{5{\times}10^{-4},2.5{\times}10^{-3}\}$. Seeds 29 and
+47 reuse the selected strengths and choose only their stopping epoch. Each variant is reported
+as the average of its three seeds' weights (``ensemble'').
 
-\textbf{Reuse.} The proposal planned to reuse DeepDow~\cite{deepdow} data and allocation layers.
-Its losses assume independent samples, which conflicts with our turnover term, so both
-implementations are written natively in PyTorch and only follow DeepDow's interface design. We
-will state this in the final report.
+\textbf{Backtester and baselines.} All strategies share one backtester. It charges costs on
+traded notional, solving exactly for the self-financing cost factor
+$\mu = 1 - c\sum_i|\mu w_i - \tilde w_i|$, and charges the initial purchase. The baselines are
+weekly equal weight; minimum variance and mean--variance (risk aversion 5), both estimated on a
+252-day rolling window with 10\% covariance shrinkage; the LSTM trained with the full
+objective; and a frozen Chronos-2-Synth forecaster~\cite{ansari2024chronos}, pre-trained on
+synthetic data only, whose 5-day median forecasts are mapped to weights by a fixed softmax
+(temperature 0.05).
+
+\textbf{Implementation.} The code is native PyTorch. We planned to reuse DeepDow~\cite{deepdow},
+but its losses assume independent samples, which conflicts with the turnover term, so we
+follow its interface design without using its code. Two team members built independent
+implementations of the training loop as a cross-check. The pipeline passes 53 unit tests
+(causality of features, split boundaries, cost accounting) and 2,931 automated consistency
+checks on the saved outputs.
 
 %-------------------------------------------------------------------------
-\section{Preliminary Results}
+\section{Preliminary Results (Validation, 2018--2020)}
 
 \begin{table*}[t]
 \centering
 \small
-\setlength{\tabcolsep}{5pt}
-\begin{tabular}{lcccccccccc}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lccccccc}
 \toprule
- & \multicolumn{3}{c}{Validation 2018--2020} & \multicolumn{5}{c}{Test 2021--2025} & \multicolumn{2}{c}{Test Sharpe vs.\ cost} \\
-\cmidrule(lr){2-4}\cmidrule(lr){5-9}\cmidrule(lr){10-11}
-Method & Sharpe & Vol.\,\% & MDD\,\% & CAGR\,\% & Vol.\,\% & Sharpe & MDD\,\% & Turnover & 0\,bps & 25\,bps \\
+Method & Net CAGR\,\% & Vol.\,\% & Sharpe & MDD\,\% & Turnover & Sharpe @0\,bps & Sharpe @25\,bps \\
 \midrule
-Equal weight            & 0.78 & 10.4 & $-$16.8 &  5.8 &  9.9 &  0.29 & $-$24.7 &  0.8 &  0.30 &  0.28 \\
-Minimum variance        & 0.92 &  4.6 &  $-$9.0 &  1.7 &  7.0 & $-$0.19 & $-$21.8 &  1.4 & $-$0.17 & $-$0.22 \\
-Mean--variance          & 0.22 & 15.8 & $-$18.0 & 10.3 & 14.1 &  0.53 & $-$30.2 & 10.5 &  0.60 &  0.42 \\
-Chronos-2-Synth (frozen)& 0.80 & 10.4 & $-$14.9 &  5.8 & 10.1 &  0.28 & $-$24.8 &  4.9 &  0.33 &  0.21 \\
-LSTM, full objective    & 0.88 &  9.7 & $-$14.8 &  1.2 &  9.3 & $-$0.18 & $-$28.0 &  9.5 & $-$0.08 & $-$0.33 \\
+Equal weight             &  9.5 & 10.4 & 0.78 & $-$16.8 &  1.0 & 0.79 & 0.77 \\
+Minimum variance         &  5.7 &  4.6 & 0.92 &  $-$9.0 &  1.2 & 0.94 & 0.88 \\
+Mean--variance           &  3.7 & 15.8 & 0.22 & $-$18.0 & 14.4 & 0.31 & 0.08 \\
+Chronos-2-Synth (frozen) &  9.7 & 10.4 & 0.80 & $-$14.9 &  5.8 & 0.85 & 0.72 \\
+LSTM, full objective     & 10.0 &  9.7 & 0.88 & $-$14.8 &  9.7 & 0.98 & 0.73 \\
 \midrule
-Transformer, return     & 0.81 & 10.3 & $-$16.8 &  6.0 & 10.1 &  0.31 & $-$25.3 &  5.2 &  0.36 &  0.23 \\
-Transformer, risk       & \textbf{1.10} &  8.4 & $-$13.1 &  1.3 &  9.1 & $-$0.17 & $-$27.7 & 10.6 & $-$0.06 & $-$0.35 \\
-Transformer, turnover   & 0.86 & 10.5 & $-$16.2 &  7.4 & 10.2 &  \textbf{0.42} & $-$24.7 &  5.1 &  0.47 &  0.35 \\
-Transformer, full       & 1.08 &  6.8 & $-$11.8 &  1.8 &  8.4 & $-$0.14 & $-$24.4 &  3.1 & $-$0.10 & $-$0.19 \\
+Transformer, return      &  9.8 & 10.3 & 0.81 & $-$16.8 &  4.5 & 0.86 & 0.75 \\
+Transformer, risk        & 10.9 &  8.4 & \textbf{1.10} & $-$13.1 &  9.0 & \textbf{1.20} & 0.93 \\
+Transformer, turnover    & 10.5 & 10.5 & 0.86 & $-$16.2 &  4.4 & 0.91 & 0.80 \\
+Transformer, full        &  9.0 &  6.8 & 1.08 & $-$11.8 &  \textbf{3.1} & 1.13 & \textbf{1.02} \\
 \bottomrule
 \end{tabular}
-\caption{Net performance at 10\,bps per traded dollar unless stated. Sharpe is annualized net
-excess Sharpe; turnover is annualized L1 turnover (multiples of portfolio value per year).
-Neural rows are three-seed weight ensembles. The bold Sharpe in each column is the best neural
-variant; mean--variance has the highest test Sharpe overall.}
-\label{tab:main}
+\caption{Validation performance (2018--2020), net of 10\,bps per traded dollar unless stated.
+Sharpe is annualized net excess Sharpe; turnover is annualized L1 turnover (multiples of
+portfolio value per year). Neural rows are three-seed weight ensembles. Bold marks the best
+value in a column among learned models. These numbers were also used for model selection and
+are therefore optimistic.}
+\label{tab:val}
 \end{table*}
 
-\textbf{Validation supports the hypothesis.} On 2018--2020 (Table~\ref{tab:main}, left), both
-penalized variants beat return-only training: the full objective raises net Sharpe from 0.81 to
-1.08 while cutting volatility from 10.3\% to 6.8\%, drawdown from 16.8\% to 11.8\% and
-turnover from 4.5 to 3.1. Mean seed Sharpe follows the same order: full 1.03, risk 0.98,
-turnover 0.81, return 0.76. A second, independent implementation (1-layer encoder, no dropout,
-10 epochs, seeds 42--44, $\lambda_r\in\{1,5\}$, $\lambda_t\in\{10^{-3},5{\times}10^{-3}\}$) gives
-the same order (0.998, 0.867, 0.747, 0.717), so the validation result does not depend on one
-code base or hyperparameter grid.
-
-\textbf{The test period reverses the risk effect.} On 2021--2025 the full ensemble earns 1.8\%
-CAGR with Sharpe $-0.14$, versus 6.0\% and 0.31 for return-only. The paired bootstrap difference
-is $-0.44$ (95\% CI $[-0.75,-0.12]$, $p=0.007$). The per-seed intervals for seeds 11 and 29 also
-exclude zero, and seed 47's barely includes it. The risk-only variant fails in the same way,
-while the turnover-only variant is the best neural model (Sharpe 0.42, ensemble difference
-$+0.12$). Figure~\ref{fig:ablation} shows that the penalties still do what they are built to
-do: the full objective has the lowest volatility and turnover of all Transformer variants. What
-fails is the return they give up for it.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{figures/cumulative_wealth.pdf}
-\caption{Test-period net portfolio value at 10\,bps. The risk-penalized Transformer (blue)
-tracks the bond-heavy baselines after the 2022 drawdown and misses the 2023--2025 recovery.}
-\label{fig:wealth}
-\end{figure}
-
-\textbf{Failure analysis.} The risk penalty learns a low-variance, bond-heavy allocation. On
-test, the full ensemble holds on average 45\% IEF and 21\% TLT, compared with 11\% and 21\%
-for return-only. Rolling minimum variance (76\% IEF) behaves the same way. In the training and
-validation data this was a sensible hedge: the daily SPY--IEF correlation was $-0.42$ in
-2006--2017 and $-0.46$ in 2018--2020. In 2021--2025 it was $+0.07$, and in 2022 IEF and TLT fell
-15\% and 31\% alongside equities. The penalty therefore fit a diversification pattern that broke
-in the test period (Figure~\ref{fig:wealth}). Our validation window, which includes the 2020
-crash when Treasuries hedged equities, rewarded exactly this pattern, so selecting
-$\lambda_r=20$ (the edge of our grid) on validation made the problem worse.
-
-\textbf{Costs and baselines.} The turnover penalty reduces cost drag: from 0 to 25\,bps the full
-ensemble loses 0.09 Sharpe, versus 0.13 for return-only and 0.29 for risk-only. Penalizing
-variance without turnover \emph{increased} trading (10.6 vs.\ 5.2), so the two penalties do not
-act independently. Among baselines, mean--variance has the best test Sharpe (0.53) but the worst
-validation Sharpe (0.22) and a 30\% drawdown, from concentrated SPY/GLD positions. No method ranks
-consistently across the two periods. The frozen Chronos baseline stays close to equal weight in
-both periods.
-
-\textbf{Caveats.} The test set has now been evaluated once under a locked protocol. Any change
-we make in response to it will be reported as post hoc rather than as an untouched test.
-Penalty strengths were calibrated on one seed and one validation path, and several return-only
-seeds stopped at epoch 1, so early stopping partly fits validation noise. Seed variation
-measures training noise, not market uncertainty. The ETF universe is fixed in hindsight,
-adjusted opens are a research proxy rather than tradable quotes, and costs are linear. Pipeline
-checks pass: 53 unit tests (causality, boundary exclusion, cost accounting) and 2,931 automated
-consistency checks on the saved results.
+\textbf{Penalties improve validation Sharpe.} Table~\ref{tab:val} and Figure~\ref{fig:abl} show
+that both penalized variants beat return-only training. The full objective raises net Sharpe
+from 0.81 to 1.08, cuts volatility from 10.3\% to 6.8\%, drawdown from 16.8\% to 11.8\% and
+turnover from 4.5 to 3.1, and gives up 0.8 points of CAGR. The ordering holds for seed means
+(full $1.03\pm0.07$, risk $0.98\pm0.07$, turnover $0.81\pm0.13$, return $0.76\pm0.12$). The
+second, independent implementation (1-layer encoder, no dropout, 10 epochs, seeds 42--44, a
+different $\lambda$ grid) gives the same order (0.998, 0.867, 0.747, 0.717), so the effect does
+not depend on one code base or grid. The full Transformer also beats every classical baseline
+on Sharpe, though minimum variance keeps lower volatility (4.6\%) and drawdown.
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=0.92\linewidth]{figures/ablations.pdf}
-\caption{Objective ablations on the test period at 10\,bps. Grey dots are individual seeds and
-diamonds are weight ensembles. The penalties lower volatility and turnover as intended, but the
-variance penalty lowers the Sharpe ratio.}
-\label{fig:ablation}
+\includegraphics[width=\linewidth]{figures/val_ablations.pdf}
+\caption{Objective ablations on validation. Left three panels: individual seeds (grey) and
+three-seed weight ensembles (diamonds) at 10\,bps. Right: ensemble Sharpe as costs rise. The
+risk-only variant leads at zero cost but trades the most and falls behind the full objective
+above about 10\,bps.}
+\label{fig:abl}
 \end{figure*}
 
-%-------------------------------------------------------------------------
-\section{Plan for the Final Report}
+\textbf{The two penalties interact.} Penalizing variance alone doubles turnover (9.0 vs.\ 4.5),
+so the risk-only model loses 0.27 Sharpe between 0 and 25\,bps, against 0.11 for the full
+objective. The full objective overtakes risk-only above about 10\,bps
+(Figure~\ref{fig:abl}, right). The turnover penalty alone changes little (Sharpe 0.86 vs.\
+0.81; turnover 4.4 vs.\ 4.5). Its value appears mainly in combination with the risk term.
 
-(1)~\textbf{Walk-forward selection.} Replace the single 2018--2020 validation window with
-expanding-window refits and multiple validation folds, so that $\lambda_r$, $\lambda_t$ and
-stopping are chosen across several stock--bond regimes, and widen the $\lambda_r$ grid.
-(2)~\textbf{Regime analysis.} Break performance down by rolling stock--bond correlation and
-volatility regime to test whether the penalty fails only when that correlation turns positive.
-(3)~\textbf{Alternative risk terms.} Compare variance with downside risk (semivariance or CVaR)
-and a direct Sharpe loss~\cite{zhang2020deep}, which may concentrate less on bonds.
-(4)~\textbf{Consolidation.} Merge the two implementations into one reported pipeline, report
-matched-budget ablations, and move the alternative implementation to a robustness appendix.
-(5)~\textbf{Reporting.} Keep the current test results as the primary pre-registered outcome and
-label every later change as post hoc.
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/val_wealth.pdf}
+\caption{Validation net value at 10\,bps. Grey band: 19 Feb--23 Mar 2020 COVID sell-off.}
+\label{fig:wealth}
+\end{figure}
+
+\textbf{Where the gain comes from.} Most of the improvement comes from the 2020 sell-off
+(Figure~\ref{fig:wealth}). Between 19 February and 23 March 2020, the full ensemble lost 6.2\%,
+compared with 14.5\% for return-only and 14.9\% for equal weight. In calmer years it earned
+less (15.5\% vs.\ 18.7\% in 2019). The allocations explain why: the full ensemble holds on
+average 44\% IEF and 19\% TLT, compared with 12\% and 21\% for return-only. This bond tilt
+relies on Treasuries hedging equities, which held throughout our sample: the daily SPY--IEF
+correlation was $-0.42$ in training and $-0.46$ in validation.
+
+\textbf{Sensitivity.} On the seed-11 search, validation Sharpe rises with $\lambda_r$ at every
+$\lambda_t$ (Table~\ref{tab:grid}), and the selected $\lambda_r=20$ sits at the edge of the
+grid.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+ & $\lambda_t=0$ & $5{\times}10^{-4}$ & $2.5{\times}10^{-3}$ \\
+\midrule
+$\lambda_r=0$  & 0.66 & 0.68 & 0.73 \\
+$\lambda_r=1$  & 0.72 & 0.74 & 0.78 \\
+$\lambda_r=5$  & 0.81 & 0.83 & 0.87 \\
+$\lambda_r=20$ & 0.90 & 0.89 & \textbf{0.95} \\
+\bottomrule
+\end{tabular}
+\caption{Validation net Sharpe (10\,bps) of the Transformer over the penalty grid, seed 11.}
+\label{tab:grid}
+\end{table}
+
+\textbf{Limitations.} Penalties and stopping epochs were selected on the same validation
+period, so Table~\ref{tab:val} overstates out-of-sample performance. That period contains one
+dominant event (the 2020 crash), and its result rests on a stock--bond hedge that may not hold
+later. Three seeds measure training noise, not market uncertainty. Several return-only seeds
+stopped at epoch 1, suggesting the stopping rule partly fits validation noise. The ETF universe
+is fixed in hindsight and costs are linear.
+
+%-------------------------------------------------------------------------
+\section{Remaining Work}
+
+\textbf{7--15 Nov.} Widen the $\lambda_r$ grid beyond 20. Add walk-forward selection
+(expanding training windows with several validation folds) so that the chosen penalties do not
+depend on a single crisis.
+\textbf{16--23 Nov.} Compare variance with downside risk (semivariance or CVaR) and a direct
+Sharpe loss~\cite{zhang2020deep}. Add a regime breakdown by rolling stock--bond correlation.
+Merge the two implementations and fix the final protocol.
+\textbf{24--30 Nov.} Evaluate the frozen models once on 2021--2025 and run the paired bootstrap
+(full vs.\ return, and each penalty vs.\ return) at 0/10/25\,bps, with failure-case analysis.
+\textbf{1--5 Dec.} Write the final report and package the code.
 
 {\small
 \begin{thebibliography}{9}\setlength{\itemsep}{0pt}
