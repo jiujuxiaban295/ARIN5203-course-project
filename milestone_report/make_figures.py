@@ -61,9 +61,9 @@ for ax, (col, title, scale) in zip(axes[:3], panels):
                    label="Seeds" if i == 0 else None)
         ax.scatter([i], [ens], color=color, marker="D", s=26, zorder=3,
                    label="Ensemble" if i == 0 else None)
-    ax.set_xticks(range(len(fams)), [f[1] for f in fams], rotation=20)
+    ax.set_xticks(range(len(fams)), [f[1] for f in fams], rotation=35, ha="right", rotation_mode="anchor")
     ax.set_title(title, fontsize=8)
-axes[0].legend(fontsize=6, frameon=False, loc="lower right")
+axes[2].legend(fontsize=6, frameon=False, loc="upper right")
 ax = axes[3]
 for fam, label, color in fams:
     d = val[val.strategy == fam + "_ensemble"].sort_values("cost_bps")
@@ -73,8 +73,8 @@ ax.plot(d.cost_bps, d.net_sharpe, marker="o", ms=3, color="#555555", ls="--", la
 ax.set_xticks([0, 10, 25])
 ax.set_xlabel("Cost (bps)")
 ax.set_title("Ensemble Sharpe vs. cost", fontsize=8)
-ax.set_ylim(0.7, 1.4)
-ax.legend(fontsize=5.5, frameon=False, loc="upper center", ncol=3, columnspacing=0.8, handlelength=1.5)
+ax.set_ylim(0.7, 1.5)
+ax.legend(fontsize=5.5, frameon=False, loc="upper center", ncol=2, columnspacing=0.8, handlelength=1.5)
 fig.tight_layout()
 fig.savefig(OUT / "val_ablations.pdf")
 fig.savefig(OUT / "val_ablations.png", dpi=200)
