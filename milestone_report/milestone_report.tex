@@ -19,6 +19,7 @@
 \usepackage{amssymb}
 \usepackage{booktabs}
 \usepackage[hidelinks]{hyperref}
+\Urlmuskip=0mu\relax % no stretchable gaps inside URLs
 
 \title{End-to-End Deep Portfolio Optimization with\\Risk- and Turnover-Aware Objectives\\[2pt]
 \large ARIN5203 Project Milestone Report}
@@ -59,7 +60,7 @@ trading days); 2005 is used only to warm up features. The series share one calen
 missing, duplicated or non-positive prices. We did not fill or winsorize any values. The
 risk-free rate is the FRED 3-month T-bill rate (DTB3)~\cite{fred_dtb3}, converted from its
 discount quote to a daily return and applied with a lag. All results use one team snapshot
-(downloaded 3 November 2026, yfinance 1.2.0), frozen with SHA-256 hashes.
+(downloaded 3 Nov.\ 2026, yfinance 1.2.0), frozen by SHA-256 hashes.
 
 \textbf{Splits.} Training 2006--2017 (626 weekly decisions), validation 2018--2020 (157), test
 2021--2025 (261). Feature scaling is fitted on training data only. Holding-period targets are cut
@@ -92,15 +93,21 @@ bidirectional attention inside it does not leak future information. An LSTM with
 and output head (6,918 parameters) serves as the deep-learning baseline.
 
 \textbf{Sequential objective.} Turnover depends on the previous holdings, so weeks cannot be
-shuffled as independent samples. Each epoch runs over the whole chronological training sequence
-and minimizes
+shuffled as independent samples. Each epoch is one full-batch step over the whole chronological
+training sequence of $K$ weeks, minimizing
 \begin{equation}
   \mathcal{L} = -\overline{G} + \lambda_r\,\mathrm{Var}(G) + \lambda_t\,\overline{T},
   \qquad T_k = \lVert \mathbf{w}_k - \tilde{\mathbf{w}}_{k} \rVert_1 ,
 \end{equation}
-where $G_k$ is the gross portfolio return in week $k$, $\mathbf{w}_k$ the new target weights
-and $\tilde{\mathbf{w}}_k$ the previous weights after drifting with prices. The four variants
-are \emph{return} ($\lambda_r{=}\lambda_t{=}0$), \emph{risk}, \emph{turnover} and \emph{full}.
+where $G_k=\mathbf{w}_k^{\top}\mathbf{r}_k$ is the gross (pre-cost) return of the target
+weights $\mathbf{w}_k$ over the week's open-to-open asset returns $\mathbf{r}_k$,
+$\mathrm{Var}(G)$ the variance penalty over $G_1,\dots,G_K$, and $\overline{T}$ the mean L1
+turnover penalty, with
+$\tilde{\mathbf{w}}_k = \mathbf{w}_{k-1}\odot(\mathbf{1}+\mathbf{r}_{k-1})/(1+G_{k-1})$ the
+drifted previous holdings ($\tilde{\mathbf{w}}_1=\mathbf{0}$: purchase from cash). $\lambda_r$
+and $\lambda_t$ weight the risk and turnover penalties; costs enter only the backtester. The
+four variants are \emph{return} ($\lambda_r{=}\lambda_t{=}0$), \emph{risk}, \emph{turnover}
+and \emph{full}.
 
 \textbf{Training and selection.} AdamW (learning rate $10^{-3}$, weight decay $10^{-4}$),
 gradient clipping at 1, at most 120 epochs, early stopping (patience 20) on validation net
@@ -124,8 +131,8 @@ implementation; reusing DeepDow's~\cite{deepdow} scaler and softmax allocation l
 proposed, is in progress but not yet used here. The sequential loss and backtester are our own,
 since DeepDow's losses treat samples independently. Two team members built independent
 implementations of the training loop as a cross-check. The pipeline passes 53 unit tests
-(causality of features, split boundaries, cost accounting) and 2,931 automated consistency
-checks on the saved outputs.
+(causality of features, split boundaries, cost accounting) and 2,931 automated checks
+on saved outputs.
 
 %-------------------------------------------------------------------------
 \section{Preliminary Results (Validation, 2018--2020)}
@@ -159,14 +166,17 @@ are therefore optimistic.}
 \end{table*}
 
 \textbf{Penalties improve validation Sharpe.} Table~\ref{tab:val} and Figure~\ref{fig:abl} show
-that both penalized variants beat return-only training. The full objective raises net Sharpe
-from 0.81 to 1.08, cuts volatility from 10.3\% to 6.8\%, drawdown from 16.8\% to 11.8\% and
-turnover from 4.5 to 3.1, and gives up 0.8 points of CAGR. The ordering holds for seed means
-(full $1.03\pm0.07$, risk $0.98\pm0.07$, turnover $0.81\pm0.13$, return $0.76\pm0.12$). The
-second, independent implementation (1-layer encoder, no dropout, 10 epochs, seeds 42--44, a
-different $\lambda$ grid) gives the same order (0.998, 0.867, 0.747, 0.717), so the effect does
-not depend on one code base or grid. The full Transformer also beats every classical baseline
-on Sharpe, though minimum variance keeps lower volatility (4.6\%) and drawdown.
+that all three regularized variants beat return-only training at 10\,bps (Sharpe: risk 1.10,
+turnover 0.86, full 1.08; return 0.81). Risk-only and full are close: the ensembles favour
+risk-only, the seed means favour full (full $1.03\pm0.07$, risk $0.98\pm0.07$, turnover
+$0.81\pm0.13$, return $0.76\pm0.12$), both within seed variation. The advantage of the full
+objective is balance: against return-only it cuts volatility from 10.3\% to 6.8\%, drawdown
+from 16.8\% to 11.8\% and turnover from 4.5 to 3.1 (the lowest volatility and turnover among
+learned models) for 0.8 points of CAGR, and it has the best Sharpe at 25\,bps (1.02). A second,
+independent implementation (1-layer encoder, no dropout, 10 epochs, seeds 42--44, a different
+$\lambda$ grid) gives the same seed-mean order (0.998, 0.867, 0.747, 0.717) on the same
+validation period. The full Transformer also beats every classical baseline on Sharpe, though
+minimum variance keeps lower volatility (4.6\%) and drawdown.
 
 \begin{figure*}[t]
 \centering
@@ -181,15 +191,8 @@ above about 10\,bps.}
 \textbf{The two penalties interact.} Penalizing variance alone doubles turnover (9.0 vs.\ 4.5),
 so the risk-only model loses 0.27 Sharpe between 0 and 25\,bps, against 0.11 for the full
 objective. The full objective overtakes risk-only above about 10\,bps
-(Figure~\ref{fig:abl}, right). The turnover penalty alone changes little (Sharpe 0.86 vs.\
+(Figure~\ref{fig:abl}, right). The turnover-only variant changes little (Sharpe 0.86 vs.\
 0.81; turnover 4.4 vs.\ 4.5). Its value appears mainly in combination with the risk term.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{figures/val_wealth.pdf}
-\caption{Validation net value at 10\,bps. Grey band: 19 Feb--23 Mar 2020 COVID sell-off.}
-\label{fig:wealth}
-\end{figure}
 
 \textbf{Where the gain comes from.} Most of the improvement comes from the 2020 sell-off
 (Figure~\ref{fig:wealth}). Between 19 February and 23 March 2020, the full ensemble lost 6.2\%,
@@ -200,8 +203,9 @@ relies on Treasuries hedging equities, which held throughout our sample: the dai
 correlation was $-0.42$ in training and $-0.46$ in validation.
 
 \textbf{Sensitivity.} On the seed-11 search, validation Sharpe rises with $\lambda_r$ at every
-$\lambda_t$ (Table~\ref{tab:grid}), and the selected $\lambda_r=20$ sits at the edge of the
-grid.
+$\lambda_t$ (Table~\ref{tab:grid}). The selected $\lambda_r=20$ and
+$\lambda_t=2.5{\times}10^{-3}$ are the largest values searched, so the search does not show
+that they are optimal (see Section~\ref{sec:remaining}).
 
 \begin{table}[t]
 \centering
@@ -220,6 +224,13 @@ $\lambda_r=20$ & 0.90 & 0.89 & \textbf{0.95} \\
 \label{tab:grid}
 \end{table}
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/val_wealth.pdf}
+\caption{Validation net value at 10\,bps. Grey band: 19 Feb--23 Mar 2020 COVID sell-off.}
+\label{fig:wealth}
+\end{figure}
+
 \textbf{Limitations.} Penalties and stopping epochs were selected on the same validation
 period, so Table~\ref{tab:val} overstates out-of-sample performance. That period contains one
 dominant event (the 2020 crash), and its result rests on a stock--bond hedge that may not hold
@@ -228,8 +239,9 @@ stopped at epoch 1, suggesting the stopping rule partly fits validation noise.
 
 %-------------------------------------------------------------------------
 \section{Remaining Work}
+\label{sec:remaining}
 
-\textbf{7--15 Nov.} Widen the $\lambda_r$ grid beyond 20. Add walk-forward selection
+\textbf{7--15 Nov.} Widen the $\lambda_r$ and $\lambda_t$ grids beyond their current upper ends. Add walk-forward selection
 (expanding training windows with several validation folds) so that the chosen penalties do not
 depend on a single crisis.
 \textbf{16--23 Nov.} Compare variance with downside risk (semivariance or CVaR) and a direct
@@ -239,8 +251,8 @@ Merge the two implementations and fix the final protocol.
 (full vs.\ return, and each penalty vs.\ return) at 0/10/25\,bps, with failure-case analysis.
 \textbf{1--5 Dec.} Write the final report and package the code.
 
-{\small
-\begin{thebibliography}{9}\setlength{\itemsep}{0pt}
+{\small\raggedright
+\begin{thebibliography}{9}\setlength{\itemsep}{0pt}\interlinepenalty=10000 % keep each entry in one column
 \bibitem{zhang2020deep} Z.~Zhang, S.~Zohren, and S.~Roberts. Deep learning for portfolio
 optimization. \emph{J. Financial Data Science}, 2(4):8--20, 2020.
 \bibitem{kisiel2023portfolio} D.~Kisiel and D.~Gorse. Portfolio Transformer for attention-based
@@ -251,13 +263,14 @@ diversification: How inefficient is the 1/N portfolio strategy? \emph{Rev. Finan
 \bibitem{ledoit2008robust} O.~Ledoit and M.~Wolf. Robust performance hypothesis testing with the
 Sharpe ratio. \emph{J. Empirical Finance}, 15(5):850--859, 2008.
 \bibitem{ansari2024chronos} A.~F.~Ansari et al. Chronos: Learning the language of time series.
-\emph{TMLR}, 2024. Checkpoint used: \url{https://huggingface.co/autogluon/chronos-2-synth}.
+\emph{TMLR}, 2024. Checkpoint and model card:
+\url{https://huggingface.co/autogluon/chronos-2-synth}.
 \bibitem{yfinance} R.~Aroussi. yfinance. \url{https://github.com/ranaroussi/yfinance}.
 \bibitem{deepdow} J.~Krepl. DeepDow. \url{https://github.com/jankrepl/deepdow}.
 \bibitem{pytorch} A.~Paszke et al. PyTorch: An imperative style, high-performance deep learning
 library. In \emph{NeurIPS}, 2019.
 \bibitem{fred_dtb3} Board of Governors of the Federal Reserve System. 3-Month Treasury Bill
-Secondary Market Rate (DTB3). FRED, Federal Reserve Bank of St. Louis.
+Secondary Market Rate (DTB3). FRED, Federal Reserve Bank of St.~Louis.
 \end{thebibliography}
 }
 
