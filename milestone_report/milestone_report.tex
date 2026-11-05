@@ -39,16 +39,17 @@ but its training objective then decides what kind of portfolio the network learn
 studies that choice. We train a small Transformer allocator with a return objective and add a
 variance penalty, an L1 turnover penalty, or both. We ask whether the penalties lower
 volatility and trading, whether the benefit survives transaction costs, and how much return
-they give up compared with unregularized training and simple rules such as equal
+they give up versus unregularized training and simple rules such as equal
 weighting~\cite{demiguel2009optimal}. The contribution is a controlled study of objectives, not a
 new architecture.
 
 \textbf{Plan and progress.} The plan has four stages: (1) build a leakage-free dataset and a
 cost-aware backtester; (2) implement the baselines and the four objective variants; (3) select
-penalty strengths and training length on a validation period; (4) evaluate once on a held-out
-test period with paired statistical tests. Stages 1--3 are complete, so this report presents
-validation results (2018--2020). The test period (2021--2025) is reserved for the final report
-and is not used for fitting, scaling or selection.
+penalty strengths and training length on a validation period; (4) evaluate the frozen models once on a
+held-out test period with paired statistical tests. All four stages have been run, including the
+frozen-model test backtest (2021--2025) and the primary bootstrap; this report focuses on
+validation results (2018--2020) and leaves test analysis to the final report. Test data were not
+used for fitting, scaling or selection.
 
 %-------------------------------------------------------------------------
 \section{Problem Statement}
@@ -74,9 +75,8 @@ open, and holdings drift until the following rebalance.
 
 \textbf{Evaluation.} The primary metric is the annualized net Sharpe ratio of daily returns in
 excess of the risk-free rate at 10\,bps per traded dollar. We also report net CAGR, volatility,
-maximum drawdown (MDD) and annualized L1 turnover, each at 0, 10 and 25\,bps. The final
-comparison of objectives will use a paired studentized circular-block
-bootstrap~\cite{ledoit2008robust} on test returns.
+maximum drawdown (MDD) and annualized L1 turnover, each at 0, 10 and 25\,bps. Test
+comparisons use a paired studentized circular-block bootstrap~\cite{ledoit2008robust}.
 
 \textbf{Expected results.} The variance penalty should lower volatility and drawdown, the
 turnover penalty should lower trading and cost drag, and together they should give the best
@@ -90,7 +90,7 @@ sinusoidal position encodings. A 2-layer Transformer encoder (4 heads, dropout 0
 the window, and the last token passes through LayerNorm, a linear layer and a softmax to give
 the weights (17,958 parameters, trained from scratch). The window contains only past data, so
 bidirectional attention inside it does not leak future information. An LSTM with the same input
-and output head (6,918 parameters) serves as the deep-learning baseline.
+and output head (6,918 parameters) is the deep-learning baseline.
 
 \textbf{Sequential objective.} Turnover depends on the previous holdings, so weeks cannot be
 shuffled as independent samples. Each epoch is one full-batch step over the whole chronological
@@ -122,7 +122,7 @@ $\mu = 1 - c\sum_i|\mu w_i - \tilde w_i|$, and charges the initial purchase. The
 weekly equal weight; minimum variance and mean--variance (risk aversion 5), both estimated on a
 252-day rolling window with 10\% covariance shrinkage; the LSTM trained with the full
 objective; and, as an extra baseline beyond the proposal, a frozen Chronos-2-Synth
-forecaster~\cite{ansari2024chronos}, pre-trained on
+forecaster~\cite{ansari2025chronos2}, pre-trained on
 synthetic data only, whose 5-day median forecasts are mapped to weights by a fixed softmax
 (temperature 0.05).
 
@@ -234,8 +234,8 @@ $\lambda_r=20$ & 0.90 & 0.89 & \textbf{0.95} \\
 \textbf{Limitations.} Penalties and stopping epochs were selected on the same validation
 period, so Table~\ref{tab:val} overstates out-of-sample performance. That period contains one
 dominant event (the 2020 crash), and its result rests on a stock--bond hedge that may not hold
-later. Three seeds measure training noise, not market uncertainty. Several return-only seeds
-stopped at epoch 1, suggesting the stopping rule partly fits validation noise.
+later. Three seeds measure training noise, not market uncertainty. Two of three return-only seeds
+selected epoch-1 checkpoints, suggesting the stopping rule partly fits validation noise.
 
 %-------------------------------------------------------------------------
 \section{Remaining Work}
@@ -246,9 +246,10 @@ stopped at epoch 1, suggesting the stopping rule partly fits validation noise.
 depend on a single crisis.
 \textbf{16--23 Nov.} Compare variance with downside risk (semivariance or CVaR) and a direct
 Sharpe loss~\cite{zhang2020deep}. Add a regime breakdown by rolling stock--bond correlation.
-Merge the two implementations and fix the final protocol.
-\textbf{24--30 Nov.} Evaluate the frozen models once on 2021--2025 and run the paired bootstrap
-(full vs.\ return, and each penalty vs.\ return) at 0/10/25\,bps, with failure-case analysis.
+Merge the two implementations.
+\textbf{24--30 Nov.} Analyse the completed test backtest: extend the primary bootstrap (full
+vs.\ return, 10\,bps) to each penalty vs.\ return at 0/10/25\,bps, with failure cases. Models
+from the changes above will be secondary analyses; the locked test result stays primary.
 \textbf{1--5 Dec.} Write the final report and package the code.
 
 {\small\raggedright
@@ -262,8 +263,8 @@ diversification: How inefficient is the 1/N portfolio strategy? \emph{Rev. Finan
 22(5):1915--1953, 2009.
 \bibitem{ledoit2008robust} O.~Ledoit and M.~Wolf. Robust performance hypothesis testing with the
 Sharpe ratio. \emph{J. Empirical Finance}, 15(5):850--859, 2008.
-\bibitem{ansari2024chronos} A.~F.~Ansari et al. Chronos: Learning the language of time series.
-\emph{TMLR}, 2024. Checkpoint and model card:
+\bibitem{ansari2025chronos2} A.~F.~Ansari et al. Chronos-2: From univariate to universal
+forecasting. arXiv:2510.15821, 2025. Checkpoint:
 \url{https://huggingface.co/autogluon/chronos-2-synth}.
 \bibitem{yfinance} R.~Aroussi. yfinance. \url{https://github.com/ranaroussi/yfinance}.
 \bibitem{deepdow} J.~Krepl. DeepDow. \url{https://github.com/jankrepl/deepdow}.
